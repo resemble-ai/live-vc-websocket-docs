@@ -24,6 +24,14 @@ from scipy.signal import resample_poly
 import sounddevice as sd
 import websockets
 
+# Protocol version this client speaks (semver). It is sent to the server as the
+# `api_version` query param on connect. Compatibility is gated on the MAJOR
+# version only — same major = compatible. If the server no longer supports this
+# major it closes the connection cleanly (close code 4426) instead of letting
+# the session misbehave. Omitting the param entirely makes the server assume
+# "1.0.0", so this is also future-proof for older clients.
+API_VERSION = "1.0.0"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -105,19 +113,21 @@ async def stream(
     # Build WebSocket URL
     ws_scheme = "wss" if server.startswith("https") else "ws"
     ws_host = server.replace("https://", "").replace("http://", "").rstrip("/")
-    if basic_auth:
-        user, passwd = basic_auth
-        ws_url = f"{ws_scheme}://{user}:{passwd}@{ws_host}/ws?ticket={ticket}"
-    else:
-        ws_url = f"{ws_scheme}://{ws_host}/ws?ticket={ticket}"
+    auth_prefix = f"{basic_auth[0]}:{basic_auth[1]}@" if basic_auth else ""
+    ws_url = f"{ws_scheme}://{auth_prefix}{ws_host}/ws?ticket={ticket}&api_version={API_VERSION}"
 
-    print(f"[{_ts()}] Connecting...")
+    print(f"[{_ts()}] Connecting (api_version={API_VERSION})...")
     async with websockets.connect(ws_url, max_size=2**20) as ws:
         print(f"[{_ts()}] Connected.")
 
         # ---- Voice selection ----
         await ws.send(json.dumps({"type": "get_voices"}))
         msg = json.loads(await ws.recv())
+        # The server rejects an incompatible major version with this error,
+        # then closes the connection (close code 4426).
+        if msg.get("type") == "error" and msg.get("code") == "unsupported_api_version":
+            print(f"[{_ts()}] Server rejected client: {msg.get('message')}")
+            return
         voices = msg.get("data", [])
 
         if voice and voice in voices:

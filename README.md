@@ -56,19 +56,29 @@ Tickets are single-use and expire after 30 seconds. If the API key is invalid, t
 
 ### Open the WebSocket
 
-Connect to the server with your ticket:
+Connect to the server with your ticket and declare your API version:
 
 ```
-wss://<host>/ws?ticket=<ticket>
+wss://<host>/ws?ticket=<ticket>&api_version=1.0.0
 ```
 
 If we gave you a username and password, embed them in the URL:
 
 ```
-wss://<username>:<password>@<host>/ws?ticket=<ticket>
+wss://<username>:<password>@<host>/ws?ticket=<ticket>&api_version=1.0.0
 ```
 
 If the ticket is invalid, expired, or already used, the connection is rejected with close code `4003`.
+
+#### API version (`api_version`)
+
+The API uses semantic versioning (`major.minor.patch`). **Compatibility is gated on the major version only** — a client and server with the same major are compatible; minor and patch differences are backwards-compatible bookkeeping and never cause a rejection.
+
+- Pass your version in the `api_version` query param (e.g. `1.0.0`, or just `1`).
+- **If you omit it, the server assumes `1.0.0`.** This default is frozen, so existing integrations keep working without change.
+- If the server no longer supports your major version, it sends an [`error`](#server-messages-reference) message with `code: "unsupported_api_version"` and closes the connection with close code **`4426`** (mnemonic for HTTP 426 "Upgrade Required"). This is a clean, predictable failure rather than undefined mid-stream behavior — treat it as "upgrade your client."
+
+The current server version and the major versions it accepts are reported in the [`settings`](#querying-server-info) response (`api_version` and `supported_api_majors`).
 
 ### Choose a Voice
 
@@ -212,7 +222,7 @@ During a session, the server may send the following messages:
 | `model_ready` | After model loads | The new voice model is loaded and ready |
 | `warmup_start` | Before first audio | The server is preparing the inference pipeline |
 | `warmup_complete` | Pipeline ready | Safe to begin sending audio |
-| `error` | On failure | Contains a `message` field describing what went wrong |
+| `error` | On failure | Contains a `message` field describing what went wrong. May include a machine-readable `code` (e.g. `unsupported_api_version`). |
 
 ---
 
@@ -226,7 +236,11 @@ These can be sent at any time during a connection:
 | `{ "type": "get_gpus" }` | `gpus` | Available GPU devices |
 | `{ "type": "get_settings" }` | `settings` | Current server configuration |
 
-The `settings` response includes `actual_output_sr` (the sample rate of audio the server sends back) and `index_disabled` (whether speaker feature matching is available on this deployment).
+The `settings` response includes:
+- `actual_output_sr` — the sample rate of audio the server sends back
+- `index_disabled` — whether speaker feature matching is available on this deployment
+- `api_version` — the server's current full version (e.g. `1.0.0`)
+- `supported_api_majors` — the list of major versions the server accepts (e.g. `[1]`)
 
 ---
 
