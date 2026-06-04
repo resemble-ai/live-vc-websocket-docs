@@ -113,6 +113,37 @@ As soon as the connection is accepted, **the server sends a `session` message** 
 - `slot` — opaque pool index for this session (not a hardware identity).
 - `settings` — the current effective settings (see [Apply Settings](#apply-settings)).
 - `capabilities.voices` — available voice models; `capabilities.output_sample_rate` — the Hz of audio the server returns; `capabilities.native_output_sample_rate` — the voice model's native rate (what you get if you don't request a specific `output_sample_rate`).
+- `deprecation` — **present only if your API version is being phased out** (see below). Absent means your version is current.
+
+#### Deprecation notices
+
+Compatibility is gated on the **major** version, but within a supported major an older version can be *soft-deprecated*: it keeps working, but you're told to upgrade and by when. When that applies to your declared `api_version`, the `session` handshake includes a `deprecation` object:
+
+```json
+"deprecation": {
+  "deprecated": true,
+  "your_version": "2.0.0",
+  "min_supported_version": "2.1.0",
+  "current_version": "2.1.0",
+  "message": "API version 2.0.0 is deprecated. Upgrade to 2.1.0 or newer to avoid disruption.",
+  "sunset": "2026-12-31",
+  "removed_in": "3.0.0",
+  "info_url": "https://.../migrating-to-2.1"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `deprecated` | Always `true` when the object is present |
+| `your_version` | The `api_version` you connected with |
+| `min_supported_version` | The lowest version that is **not** deprecated — upgrade to this or newer |
+| `current_version` | The server's latest version |
+| `message` | Human-readable summary, safe to log/surface to operators |
+| `sunset` | *(optional)* ISO-8601 date on/after which your version stops being served |
+| `removed_in` | *(optional)* the server version that drops support for yours |
+| `info_url` | *(optional)* link to a migration guide |
+
+Your connection is **not** rejected — everything still works. Treat this as a signal to schedule an upgrade. A robust client logs the `message` (and alerts if `sunset` is near). This mirrors the HTTP [`Deprecation`/`Sunset`](https://www.rfc-editor.org/rfc/rfc8594) header convention. Once your version is actually removed, you'll instead be rejected at connect with `unsupported_api_version` / close code `4426`.
 
 ### Choose a Voice
 

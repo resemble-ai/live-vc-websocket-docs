@@ -148,6 +148,17 @@ async def stream(
         print(f"[{_ts()}] Session {sess.get('session_id')} | slot {sess.get('slot')} "
               f"| server api {sess.get('api_version')}")
 
+        # Deprecation notice: present only if our api_version is being phased out.
+        # We're still served — this is a signal to schedule an upgrade.
+        dep = sess.get("deprecation")
+        if dep:
+            print(f"[{_ts()}] ⚠️  DEPRECATION: {dep.get('message')}")
+            if dep.get("sunset"):
+                print(f"[{_ts()}] ⚠️  Support ends {dep['sunset']}"
+                      + (f" (removed in {dep['removed_in']})" if dep.get("removed_in") else ""))
+            if dep.get("info_url"):
+                print(f"[{_ts()}] ⚠️  Migration guide: {dep['info_url']}")
+
         # ---- Voice selection ----
 
         if voice and voice in voices:
