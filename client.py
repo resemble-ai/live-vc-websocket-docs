@@ -24,13 +24,14 @@ from scipy.signal import resample_poly
 import sounddevice as sd
 import websockets
 
-# Protocol version this client speaks (semver). It is sent to the server as the
+# Protocol version this client speaks (semver). Sent to the server as the
 # `api_version` query param on connect. Compatibility is gated on the MAJOR
-# version only — same major = compatible. If the server no longer supports this
-# major it closes the connection cleanly (close code 4426) instead of letting
-# the session misbehave. Omitting the param entirely makes the server assume
-# "1.0.0", so this is also future-proof for older clients.
-API_VERSION = "1.0.0"
+# version only — same major = compatible; minor/patch are bookkeeping. If the
+# server doesn't support this major it sends an `unsupported_api_version` error
+# and closes the connection (close code 4426). Omitting the param makes the
+# server assume the legacy 1.0.0, which is no longer supported — so always
+# declare the current major.
+API_VERSION = "2.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +41,16 @@ API_VERSION = "1.0.0"
 def _ts():
     """Compact timestamp for log lines."""
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+
+def _is_error(msg: dict) -> bool:
+    """If msg is an error envelope, print it and return True. Errors use the
+    shape {"type": "error", "data": {"code", "message", "details"?}}."""
+    if msg.get("type") == "error":
+        err = msg.get("data", {})
+        print(f"[{_ts()}] Server error [{err.get('code')}]: {err.get('message')}")
+        return True
+    return False
 
 
 def _pick_device(kind: str) -> int:
@@ -120,15 +131,24 @@ async def stream(
     async with websockets.connect(ws_url, max_size=2**20) as ws:
         print(f"[{_ts()}] Connected.")
 
-        # ---- Voice selection ----
-        await ws.send(json.dumps({"type": "get_voices"}))
+        # ---- Handshake ----
+        # The server's first message is a `session` (or an `error` if it rejects
+        # us, e.g. an unsupported API major — then it closes with code 4426).
         msg = json.loads(await ws.recv())
-        # The server rejects an incompatible major version with this error,
-        # then closes the connection (close code 4426).
-        if msg.get("type") == "error" and msg.get("code") == "unsupported_api_version":
-            print(f"[{_ts()}] Server rejected client: {msg.get('message')}")
+        if msg.get("type") == "error":
+            err = msg.get("data", {})
+            print(f"[{_ts()}] Server rejected client [{err.get('code')}]: {err.get('message')}")
             return
-        voices = msg.get("data", [])
+        if msg.get("type") != "session":
+            print(f"[{_ts()}] Unexpected first message: {msg.get('type')!r}")
+            return
+        sess = msg["data"]
+        caps = sess.get("capabilities", {})
+        voices = caps.get("voices", [])
+        print(f"[{_ts()}] Session {sess.get('session_id')} | slot {sess.get('slot')} "
+              f"| server api {sess.get('api_version')}")
+
+        # ---- Voice selection ----
 
         if voice and voice in voices:
             selected_voice = voice
@@ -163,7 +183,6 @@ async def stream(
             "chunk_samples": chunk_samples,
             "client_input_sr": sample_rate,
             "extra_convert_size": extra_convert_size,
-            "f0_up": 0,
             "vad": 2,
         }
         print(f"[{_ts()}] Configuring...")
@@ -171,6 +190,8 @@ async def stream(
 
         while True:
             msg = json.loads(await ws.recv())
+            if _is_error(msg):
+                return
             mtype = msg.get("type")
             if mtype == "model_switching":
                 print(f"[{_ts()}] Loading model '{msg['data']['target_voice']}'...", end="", flush=True)
@@ -186,8 +207,11 @@ async def stream(
         await ws.send(json.dumps({"type": "get_settings"}))
         while True:
             msg = json.loads(await ws.recv())
+            if _is_error(msg):
+                return
             if msg.get("type") == "settings":
-                output_sr = msg["data"].get("actual_output_sr", sample_rate)
+                caps = msg["data"].get("capabilities", {})
+                output_sr = caps.get("output_sample_rate", sample_rate)
                 print(f"[{_ts()}] Server output sample rate: {output_sr} Hz")
                 break
 
@@ -199,6 +223,9 @@ async def stream(
         print(f"[{_ts()}] Waiting for pipeline warmup...", end="", flush=True)
         while True:
             msg = json.loads(await ws.recv())
+            if _is_error(msg):
+                print()
+                return
             mtype = msg.get("type")
             if mtype == "warmup_complete":
                 print(" ready.")
@@ -281,7 +308,8 @@ async def stream(
                         continue
 
                     json_len = struct.unpack("<I", data[:4])[0]
-                    meta = json.loads(data[4:4 + json_len])
+                    header = json.loads(data[4:4 + json_len])
+                    meta = header.get("data", {})  # v2: { type, data: { timestamp, latency } }
                     audio = np.frombuffer(data[4 + json_len:], dtype=np.int16).astype(np.float32) / 32768.0
                     rtt = time.time() * 1000 - meta["timestamp"]
 
