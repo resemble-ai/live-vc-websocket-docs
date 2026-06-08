@@ -341,8 +341,10 @@ A couple of plain HTTP endpoints are available without a ticket — useful for m
 
 | Endpoint | Method | Returns |
 | --- | --- | --- |
-| `/health` | GET | `{ "status": "ok", "api_version": "2.0.0" }` — liveness/readiness probe |
+| `/health` | GET | `{ "status": "ok" }` — liveness/readiness probe |
 | `/api/capacity` | GET | `{ "total", "available" }` — total concurrent conversion slots, and how many are free right now |
+
+The protocol version the server speaks is in the [`session`](#the-session-handshake) handshake (`data.api_version`), so you don't need a separate call for it.
 
 `total` is the number of simultaneous conversions the service can run; `available` is how many of those are currently free. Poll `/api/capacity` before connecting: if it reports `available: 0`, a WebSocket connection will be rejected with close code `4029` (see [WebSocket close codes](#websocket-close-codes)) — back off and retry using the `retry_after` hint.
 
