@@ -21,6 +21,41 @@ uv run client.py --api-key {API-KEY} --server https://{SERVER-DOMAIN}
 If we provided a username and password, pass those as well with `--basic-user {USERNAME} --basic-pass {PASSWORD}`
 
 
+## Caveats, Expectations, and Best Practices
+
+Please read this section before evaluating the API. Most latency and quality complaints turn out to be environment or client setup rather than the API itself, and the items below cover nearly all of them.
+
+### Latency
+
+End-to-end latency is the sum of four parts: input accumulation (one chunk, 120ms at the recommended settings), network transit in both directions, server processing, and your playback buffer.
+
+- **Network is usually the biggest variable.** Transit time correlates almost directly with physical distance to the server.
+- **Server processing is roughly 90ms per 120ms chunk** on the current deployment. This scales with GPU class; faster GPU tiers roughly halve it.
+- **Bluetooth adds latency you cannot fix.** Bluetooth audio buffers 100 to 300ms on its own, and many headsets also drop into a low-bitrate telephony profile when the microphone is active, which degrades input quality on top of the delay. Use wired headphones for any serious evaluation.
+
+### Input quality: the model converts what it hears
+
+- **Voice isolation is not optional.** Background sound (fans, a TV in the next room, other people talking) gets interpreted as speech and causes artifacts. Run a dedicated speech denoiser in front of the API. We like to use RNNoise: it is small, fast, and free. Any equivalent neural denoiser works.
+- **Test with wired headphones.** Without headphones, the converted voice can leak from your speakers back into your microphone and get re-converted.
+- **Speak clearly.** A warbly or unstable output voice usually means the input was mumbled, too quiet, or too far from the microphone. Speaking clearly at a consistent distance fixes it.
+- **Resample properly.** Send 48kHz mono. If your capture device runs at another rate, resample with a real filter (anti-aliased). Quick-and-dirty decimation aliases the signal and audibly hurts conversion quality.
+
+### Settings
+
+- **Keep `vad` at 2.** Voice activity detection gates the silence between phrases and removes a whole class of artifacts. Level 2 is the right default for nearly everyone.
+- **Keep `extra_convert_size` at 32784** unless you are specifically optimizing server processing time. It is the strongest quality knob and it does not add latency the way the name might suggest.
+- **Keep `chunk_samples` at 5760** (120ms). Smaller chunks shave input latency but increase per-chunk overhead for both you and the server.
+- **Set `output_sample_rate` to the rate your playback runs at.** The server resamples better than a quick client-side implementation will.
+
+### Client implementation tips
+
+- **Buffer deliberately.** Network jitter means converted chunks arrive unevenly, so play through a jitter buffer. What works well for us: start playback only after ~100ms is buffered, let the buffer self-regulate, cap it around 400ms and trim the oldest audio past the cap, and apply a few milliseconds of fade out and in around an underrun so it clicks less. Treat those numbers as starting points and tune them to taste for your network and use case. An unbounded buffer turns every network hiccup into permanently added delay.
+- **Wait for `warmup_complete` before streaming.** Audio sent during warmup or a voice switch is dropped by design.
+- **Release your connection when you are done.** A connected session holds a dedicated conversion slot whether or not audio is flowing, and it is held indefinitely. Nobody else can use that slot until you disconnect. Send `stream_stop` and close the socket when the user stops; reconnecting later is cheap (one ticket request and one connect).
+- **Check capacity and handle rejection.** Poll `/api/capacity` before connecting. If you are rejected with close code `4029`, back off for the suggested `retry_after` seconds and try again.
+- **Measure with the timestamp echo.** The timestamp you send with each audio frame comes back in the response header, so you can compute true round-trip latency in your own client. Note that this round trip includes server processing; the header also carries the server's own processing time (`data.latency.total`), so subtracting it gives you your pure network transit.
+
+
 ## Getting Started 
 There are three steps to get audio flowing:
 
